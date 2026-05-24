@@ -88,3 +88,36 @@ def test_csv_writer_path():
         writer.open()
         assert writer.fpath.name.startswith("TestVessel")
         writer.close()
+
+
+def test_dashboard_renders_without_crashing():
+    """FlightDashboard.print_state should not raise with a FlightRecord."""
+    from krpc_rendezvous.common.flight_monitor import FlightDashboard, FlightRecord
+    dash = FlightDashboard.__new__(FlightDashboard)
+    record = FlightRecord(
+        vessel_name="Kerbal One",
+        altitude=250000,
+        apoapsis=280000,
+        periapsis=220000,
+        inclination=28.5,
+        speed=1200.0,
+        vertical_speed=150.0,
+        horizontal_speed=800.0,
+        latitude=10.0,
+        longitude=45.0,
+        altitude_from_surface=245000,
+        stage=2,
+        thrust=500.0,
+        available_thrust=600.0,
+        mass=50000.0,
+        stage_remaining_fuel=1200.0,
+        stage_delta_v=4500000.0,
+        direction_heading=90.0,
+        period=3600.0,
+        time_to_ap=1200.0,
+        time_to_pe=1800.0,
+        eccentricity=0.5,
+        semi_major_axis=3500000.0,
+    )
+    # should not raise
+    dash._print_state(record)

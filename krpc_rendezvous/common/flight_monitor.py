@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import logging
 import os
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -341,3 +342,60 @@ class _CsvWriter:
     @property
     def fpath(self) -> Path:
         return self._fpath
+
+
+class FlightDashboard:
+    """Terminal HUD that prints FlightRecord state at 4Hz.
+
+    Usage:
+        dash = FlightDashboard(monitor)
+        dash.start()    # prints in background thread
+        # ...
+        dash.stop()
+    """
+
+    def __init__(self, monitor: 'FlightMonitor', print_rate: float = 1.0):
+        self._monitor = monitor
+        self._print_rate = print_rate
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self):
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._pump, daemon=True, name='FlightDashboard-pump')
+        self._thread.start()
+
+    def stop(self):
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=3.0)
+
+    def _pump(self):
+        import time
+        interval = 1.0 / self._print_rate
+        while self._running:
+            state = self._monitor.get_state()
+            if state:
+                self._print_state(state)
+            time.sleep(interval)
+
+    def _print_state(self, r: FlightRecord):
+        out = sys.stdout
+        lines = [
+            "",
+            f"  ✈  {r.vessel_name or 'Unknown'}  ·  Stage {r.stage}  ·  UT {r.ut:.1f}",
+            f"  ALT {r.altitude/1000:.1f}km  AP {r.apoapsis/1000:.1f}km  PE {r.periapsis/1000:.1f}km  INC {r.inclination:.1f}°",
+            f"  SPD {r.speed:.0f}  VSPD {r.vertical_speed:+.0f}  HSPD {r.horizontal_speed:.0f}",
+            f"  HDG {r.direction_heading:.0f}°  LAT {r.latitude:+.2f}°  LON {r.longitude:+.2f}°",
+            f"  MASS {r.mass/1000:.1f}t  THRUST {r.thrust:.0f}/{r.available_thrust:.0f} kN",
+            f"  FUEL {r.stage_remaining_fuel:.0f} kg  ΔV {r.stage_delta_v/1000:.1f} km/s",
+            "",
+        ]
+        cursor_up = f"\033[{len(lines)}A"
+        clear = "\033[K"
+        out.write(cursor_up)
+        for line in lines:
+            out.write(line + clear + "\r\n")
+        out.flush()
