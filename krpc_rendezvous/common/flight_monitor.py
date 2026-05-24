@@ -399,3 +399,27 @@ class FlightDashboard:
         for line in lines:
             out.write(line + clear + "\r\n")
         out.flush()
+
+
+def default_alerts() -> list[AlertRule]:
+    """Factory for commonly useful flight alerts."""
+    alerts = []
+
+    def print_alert(msg: str) -> Callable:
+        def cb(r: FlightRecord):
+            print(f"\n⚠️  FLIGHT ALERT  {msg}")
+        return cb
+
+    # Orbit degradation warnings
+    alerts.append(AlertRule("periapsis", "<", 70000, print_alert("Periapsis below 70km — atmosphere risk!")))
+    alerts.append(AlertRule("apoapsis", "<", 70000, print_alert("Apoapsis below 70km — orbit degrading!")))
+
+    # Inclination issues for rendezvous
+    alerts.append(AlertRule("inclination", ">", 30.0, print_alert("High inclination — check rendezvous window")))
+    alerts.append(AlertRule("inclination", "<", 1.0, print_alert("Very low inclination — good for equatorial launch")))
+
+    # Descent/ascent rate
+    alerts.append(AlertRule("vertical_speed", "<", -500, print_alert("Rapid descent detected!")))
+    alerts.append(AlertRule("vertical_speed", ">", 500, print_alert("Rapid ascent detected!")))
+
+    return alerts
