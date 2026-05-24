@@ -51,3 +51,40 @@ def test_alert_rule_callback():
 def test_alert_rule_invalid_op():
     with pytest.raises(ValueError, match="Invalid op"):
         AlertRule("altitude", "~", 70000, lambda r: None)
+
+
+# ── FlightMonitor tests ──────────────────────────────────────────────────
+
+from unittest.mock import MagicMock, patch
+
+
+def test_flight_monitor_init_no_connection():
+    """Can be instantiated without kRPC — for unit testing."""
+    import threading
+    from krpc_rendezvous.common.flight_monitor import FlightMonitor
+    monitor = FlightMonitor.__new__(FlightMonitor)
+    monitor._state = None
+    monitor._conn = None
+    monitor._state_lock = threading.Lock()
+    from krpc_rendezvous.common.flight_monitor import FlightRecord
+    monitor.update_from_record(FlightRecord(vessel_name="test", altitude=1000))
+    assert monitor.get_state().vessel_name == "test"
+
+
+def test_flight_monitor_default_log_dir():
+    from krpc_rendezvous.common.flight_monitor import FlightMonitor
+    monitor = FlightMonitor.__new__(FlightMonitor)
+    log_dir = monitor._default_log_dir()
+    assert log_dir.name == 'logs'
+    assert '.krpc-rendezvous' in str(log_dir)
+
+
+def test_csv_writer_path():
+    from krpc_rendezvous.common.flight_monitor import _CsvWriter
+    from pathlib import Path
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        writer = _CsvWriter(Path(tmp), "TestVessel")
+        writer.open()
+        assert writer.fpath.name.startswith("TestVessel")
+        writer.close()
