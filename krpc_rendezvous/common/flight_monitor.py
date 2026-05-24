@@ -45,3 +45,35 @@ class FlightRecord:
     available_thrust: float = 0.0 # kN
     stage_remaining_fuel: float = 0.0  # kg
     stage_delta_v: float = 0.0    # m/s
+
+
+@dataclass(slots=True)
+class AlertRule:
+    """Threshold alert: fires callback when field op value is True."""
+    field: str
+    op: str          # "<" | ">" | "<=" | ">=" | "==" | "!="
+    threshold: float
+    callback: Callable[[FlightRecord], None]
+
+    VALID_OPS = {"<", ">", "<=", ">=", "==", "!="}
+
+    def __post_init__(self):
+        if self.op not in self.VALID_OPS:
+            raise ValueError(f"Invalid op {self.op!r}, expected one of {self.VALID_OPS}")
+
+    def check(self, record: FlightRecord) -> bool:
+        value = getattr(record, self.field, None)
+        if value is None:
+            return False
+        op_fn = {
+            "<":  lambda v, t: v < t,
+            ">":  lambda v, t: v > t,
+            "<=": lambda v, t: v <= t,
+            ">=": lambda v, t: v >= t,
+            "==": lambda v, t: v == t,
+            "!=": lambda v, t: v != t,
+        }[self.op]
+        triggered = op_fn(float(value), float(self.threshold))
+        if triggered:
+            self.callback(record)
+        return triggered
