@@ -9,72 +9,72 @@ Phase 1: equatorial orbits only (inc ≤ 3°).
 
 import argparse
 import json
+import logging
 import math
 import sys
-import logging
 
 import numpy as np
 
-from common.orbit_utils import (
-    kepler_epoch,
-    orbital_period,
-    mean_motion,
-    mean_anomaly_at_time,
-    true_anomaly_from_mean,
-    orbital_position,
-    lambert_universal,
-    delta_v_estimate,
-    ascent_duration_estimate,
+from krpc_rendezvous.common.config import (
+    KERBIN_ROTATION_RATE,
+    MAX_INCLINATION_DEG,
+    WINDOW_SEARCH_DAYS,
+    WINDOW_SEARCH_STEP,
+    WINDOW_SKIP_SECONDS,
+    WINDOW_TOLERANCE_DEG,
+)
+from krpc_rendezvous.common.krpc_connection import connect_krpc
+from krpc_rendezvous.common.orbit_utils import (
     MU_KERBIN,
     R_KERBIN,
-    G0_KERBIN,
+    ascent_duration_estimate,
+    delta_v_estimate,
+    lambert_universal,
+    mean_anomaly_at_time,
+    mean_motion,
+    orbital_position,
+    true_anomaly_from_mean,
 )
-from common.krpc_connection import connect_krpc, get_connection
 
 logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────
 
-KSC_LON_RAD = 0.0  # KSC at ~0° longitude (radians)
-KERBIN_ROTATION_PERIOD = 21600.0  # 6 h sidereal day [s]
-KERBIN_ROTATION_RATE = 2.0 * math.pi / KERBIN_ROTATION_PERIOD  # rad/s
+MAX_INCLINATION_RAD = math.radians(MAX_INCLINATION_DEG)
 
 # Pitch curve: (altitude_m, pitch_rad)
 PITCH_CURVE = [
-    (0, math.pi / 2),          # 90° vertical
-    (4000, math.radians(85)),   # 85°
-    (8000, math.radians(70)),   # 70°
+    (0, math.pi / 2),  # 90° vertical
+    (4000, math.radians(85)),  # 85°
+    (8000, math.radians(70)),  # 70°
     (20000, math.radians(35)),  # 35°
-    (40000, math.radians(15)), # 15°
+    (40000, math.radians(15)),  # 15°
     (70000, math.radians(5)),  # 5°
 ]
-
-MAX_INCLINATION_DEG = 3.0
-MAX_INCLINATION_RAD = math.radians(MAX_INCLINATION_DEG)
-DEFAULT_WINDOW_TOLERANCE_DEG = 2.0
-DEFAULT_SKIP_SECONDS = 5 * 3600  # ~5 h
-DEFAULT_STEP_SECONDS = 30
-DEFAULT_SEARCH_DAYS = 1
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
-def ksc_longitude(t: float, now: float) -> float:
-    """KSC longitude at universal time *t*, given current time *now*.
 
-    KSC is at longitude ≈ 0° at t=now; Kerbin rotates at 2π/21600 rad/s.
+def ksc_longitude(t: float) -> float:
+    """KSC longitude at universal time *t*.
+
+    Kerbin rotates at 2π/21600 rad/s. KSC starts at longitude 0 when UT=0.
+    This is an ABSOLUTE computation in the same reference frame as target_longitude.
     """
-    return (KSC_LON_RAD + KERBIN_ROTATION_RATE * (t - now)) % (2.0 * math.pi)
+    return (KERBIN_ROTATION_RATE * t) % (2.0 * math.pi)
 
 
-def target_longitude(t: float, now: float, lan: float, arg_pe: float,
-                     ecc: float, sma: float, M0: float) -> float:
+def target_longitude(
+    t: float, epoch_ut: float, lan: float, arg_pe: float, ecc: float, sma: float, M0: float
+) -> float:
     """Target vessel longitude at universal time *t*.
 
+    M0 is the mean anomaly at epoch_ut.
     For equatorial orbits: lon = Ω + ω + ν(t).
     """
     n = mean_motion(sma)
-    M = mean_anomaly_at_time(t, now, M0, n)
+    M = mean_anomaly_at_time(t, epoch_ut, M0, n)
     nu = true_anomaly_from_mean(M, ecc)
     return (lan + arg_pe + nu) % (2.0 * math.pi)
 
@@ -85,13 +85,24 @@ def angular_distance(a: float, b: float) -> float:
     return min(d, 2.0 * math.pi - d)
 
 
-def find_launch_windows(now: float, lan: float, arg_pe: float,
-                        ecc: float, sma: float, M0: float,
-                        search_days: float = DEFAULT_SEARCH_DAYS,
-                        step: float = DEFAULT_STEP_SECONDS,
-                        tolerance_deg: float = DEFAULT_WINDOW_TOLERANCE_DEG,
-                        skip_seconds: float = DEFAULT_SKIP_SECONDS):
+def find_launch_windows(
+    now: float,
+    lan: float,
+    arg_pe: float,
+    ecc: float,
+    sma: float,
+    M0: float,
+    epoch_ut: float,
+    ascent_time: float = 180.0,
+    search_days: float = WINDOW_SEARCH_DAYS,
+    step: float = WINDOW_SEARCH_STEP,
+    tolerance_deg: float = WINDOW_TOLERANCE_DEG,
+    skip_seconds: float = WINDOW_SKIP_SECONDS,
+):
     """Search for launch windows over *search_days* starting from *now*.
+
+    For each candidate launch time *t*, the rendezvous occurs at *t + ascent_time*.
+    Window condition: target_longitude(t + ascent_time) ≈ ksc_longitude(t).
 
     Yields (window_ut, angular_error_rad) for each window found.
     After finding a window, skips *skip_seconds* before searching again.
@@ -99,25 +110,46 @@ def find_launch_windows(now: float, lan: float, arg_pe: float,
     tolerance_rad = math.radians(tolerance_deg)
     search_end = now + search_days * 86400.0
     t = now
-    windows = []
+    windows: list[tuple[float, float]] = []
 
     while t < search_end:
-        ksc_lon = ksc_longitude(t, now)
-        tgt_lon = target_longitude(t, now, lan, arg_pe, ecc, sma, M0)
+        ksc_lon = ksc_longitude(t)
+        tgt_lon = target_longitude(t + ascent_time, epoch_ut, lan, arg_pe, ecc, sma, M0)
         err = angular_distance(ksc_lon, tgt_lon)
+
+        # Debug: print first match details
+        if err <= tolerance_rad and not windows:
+            print(f'  [DEBUG] Window found at t={t:.1f}', file=sys.stderr)
+            print(f'    ksc_lon(t)={math.degrees(ksc_lon):.2f}deg', file=sys.stderr)
+            print(f'    tgt_lon(t+ascent)={math.degrees(tgt_lon):.2f}deg', file=sys.stderr)
+            print(f'    err={math.degrees(err):.4f}deg', file=sys.stderr)
+            print(f'    epoch_ut={epoch_ut:.1f}  now={now:.1f}', file=sys.stderr)
+            print(f'    M0={M0:.4f}rad', file=sys.stderr)
+            print(
+                f'    lan={math.degrees(lan):.1f}deg arg_pe={math.degrees(arg_pe):.1f}deg',
+                file=sys.stderr,
+            )
 
         if err <= tolerance_rad:
             windows.append((t, err))
-            t += skip_seconds  # skip to next window opportunity
+            t += skip_seconds
         else:
             t += step
 
     return windows
 
 
-def compute_window_dv(window_ut: float, now: float, ascent_time: float,
-                      target_orbit: dict, ascent_altitude: float = 80000.0):
+def compute_window_dv(
+    window_ut: float,
+    now: float,
+    ascent_time: float,
+    target_orbit: dict,
+    ascent_altitude: float = 80000.0,
+):
     """Compute total Δv for a launch window.
+
+    Target position is computed at (window_ut + ascent_time) — the
+    rendezvous occurs AFTER the ascent, not at launch.
 
     Returns (ascent_dv, rendezvous_dv, total_dv).
     """
@@ -126,30 +158,31 @@ def compute_window_dv(window_ut: float, now: float, ascent_time: float,
     ecc = target_orbit['ecc']
     sma = target_orbit['sma']
     M0 = target_orbit['M0']
+    epoch_ut = target_orbit['epoch']
     inc = target_orbit['inc']
 
-    # Ascent endpoint: position on Kerbin surface at KSC, velocity = 0 (relative)
-    # After ascent, vessel is at altitude ascent_altitude above KSC longitude
-    ksc_lon = ksc_longitude(window_ut, now)
-    ascent_r = R_KERBIN + ascent_altitude
-
-    # Ascent endpoint position (equatorial plane, KSC longitude)
-    r1 = np.array([ascent_r * math.cos(ksc_lon),
-                    ascent_r * math.sin(ksc_lon),
-                    0.0])
-
-    # Target position at arrival time
+    # Rendezvous time = launch + ascent
     arrival_ut = window_ut + ascent_time
+
+    # Chaser position at arrival: near KSC longitude at arrival time
+    ksc_lon_arrival = ksc_longitude(arrival_ut)
+    ascent_r = R_KERBIN + ascent_altitude
+    r1 = np.array([ascent_r * math.cos(ksc_lon_arrival), ascent_r * math.sin(ksc_lon_arrival), 0.0])
+
+    # Target position at arrival time (NOT at launch time!)
     n = mean_motion(sma)
-    M_arr = mean_anomaly_at_time(arrival_ut, now, M0, n)
+    M_arr = mean_anomaly_at_time(arrival_ut, epoch_ut, M0, n)
     nu_arr = true_anomaly_from_mean(M_arr, ecc)
     r2, v2_target = orbital_position(inc, lan, arg_pe, sma, ecc, nu_arr)
 
     # Lambert solve: ascent endpoint → target position
+    # Transfer time: use a fixed ~600s (10 min) for low-orbit coast,
+    # not ascent_time (82s) which is too short for orbital transfer
+    transfer_time = max(300.0, ascent_time * 2)
     try:
-        v1_lambert, v2_lambert = lambert_universal(r1, r2, ascent_time, MU_KERBIN)
+        v1_lambert, v2_lambert = lambert_universal(r1, r2, transfer_time, MU_KERBIN)
     except Exception:
-        logger.warning("Lambert solver failed for window at UT=%.1f", window_ut)
+        logger.warning('Lambert solver failed for window at UT=%.1f', window_ut)
         return None, None, None
 
     # Circular orbit velocity at ascent altitude
@@ -179,15 +212,17 @@ def read_target_orbit(conn):
     target = sc.target_vessel
 
     if target is None:
-        print("ERROR: No target vessel set. Set a target in KSP first.", file=sys.stderr)
+        print('ERROR: No target vessel set. Set a target in KSP first.', file=sys.stderr)
         sys.exit(1)
 
     orbit = target.orbit
     inc = orbit.inclination
     if inc > MAX_INCLINATION_RAD:
-        print(f"ERROR: Target inclination {math.degrees(inc):.2f}° exceeds "
-              f"{MAX_INCLINATION_DEG}° limit (equatorial only for Phase 1).",
-              file=sys.stderr)
+        print(
+            f'ERROR: Target inclination {math.degrees(inc):.2f}° exceeds '
+            f'{MAX_INCLINATION_DEG}° limit (equatorial only for Phase 1).',
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     now = sc.ut
@@ -196,17 +231,8 @@ def read_target_orbit(conn):
     lan = orbit.longitude_of_ascending_node
     arg_pe = orbit.argument_of_periapsis
 
-    # Compute mean anomaly at current time
-    n = mean_motion(sma)
-    true_anom = orbit.true_anomaly
-    # Convert true anomaly to mean anomaly
-    E = kepler_epoch(true_anom, ecc)  # approximate: use true anomaly as M for small e
-    # Actually: E from true anomaly, then M from E
-    # true_anomaly_from_mean gives f from M; we need M from f
-    # M = E - e*sin(E), and E from true anomaly
-    E_from_f = 2.0 * math.atan2(math.sqrt(1 - ecc) * math.sin(true_anom / 2),
-                                  math.sqrt(1 + ecc) * math.cos(true_anom / 2))
-    M0 = (E_from_f - ecc * math.sin(E_from_f)) % (2.0 * math.pi)
+    # Mean anomaly at current time (direct from kRPC, most reliable)
+    M0 = orbit.mean_anomaly
 
     return {
         'inc': inc,
@@ -215,7 +241,8 @@ def read_target_orbit(conn):
         'sma': sma,
         'ecc': ecc,
         'M0': M0,
-        'true_anomaly': true_anom,
+        'epoch': now,  # M0 is at this epoch
+        'true_anomaly': orbit.true_anomaly,
     }
 
 
@@ -234,18 +261,19 @@ def read_vessel_resources(conn):
     fuel = resources.amount('LiquidFuel')
 
     # Dry mass estimate: current mass minus fuel mass
-    # LiquidFuel density ≈ 5 kg/unit in KSP
-    fuel_mass = fuel * 5.0 / 1000.0  # tonnes
+    # LiquidFuel density: 1 unit = 5 kg
+    fuel_mass = fuel * 5.0  # kg
     mf = m0 - fuel_mass
     if mf <= 0:
         mf = m0 * 0.3  # fallback
 
     # Engine info: aggregate from all engines
+    # Use max_thrust (available even when inactive) and vacuum Isp (for Δv estimation)
     parts = vessel.parts
     engines = parts.engines
     if engines:
-        isp_list = [e.specific_impulse for e in engines]
-        thrust_list = [e.thrust for e in engines]
+        isp_list = [e.vacuum_specific_impulse for e in engines]
+        thrust_list = [e.max_thrust for e in engines]
         avg_isp = sum(isp_list) / len(isp_list)
         total_thrust = sum(thrust_list)
     else:
@@ -273,70 +301,110 @@ def compute_available_dv(vessel_info: dict) -> float:
 def format_table(windows_data: list) -> str:
     """Format window results as a readable table."""
     lines = []
-    lines.append(f"{'#':>3}  {'Launch UT':>14}  {'Ascent Δv':>10}  "
-                 f"{'Rendez Δv':>10}  {'Total Δv':>10}  {'Available':>10}")
-    lines.append("-" * 70)
+    lines.append(
+        f'{"#":>3}  {"Launch UT":>14}  {"Ascent Δv":>10}  '
+        f'{"Rendez Δv":>10}  {"Total Δv":>10}  {"Available":>10}'
+    )
+    lines.append('-' * 70)
 
     for i, w in enumerate(windows_data, 1):
         lines.append(
-            f"{i:3d}  {w['launch_ut']:14.1f}  "
-            f"{w['ascent_dv']:10.1f}  {w['rendezvous_dv']:10.1f}  "
-            f"{w['total_dv']:10.1f}  {w['available_dv']:10.1f}"
+            f'{i:3d}  {w["launch_ut"]:14.1f}  '
+            f'{w["ascent_dv"]:10.1f}  {w["rendezvous_dv"]:10.1f}  '
+            f'{w["total_dv"]:10.1f}  {w["available_dv"]:10.1f}'
         )
 
-    return "\n".join(lines)
+    return '\n'.join(lines)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Launch window calculator for KSP kRPC direct ascent rendezvous"
+        description='Launch window calculator for KSP kRPC direct ascent rendezvous'
     )
-    parser.add_argument("--search-days", type=float, default=DEFAULT_SEARCH_DAYS,
-                        help=f"Number of days to search (default: {DEFAULT_SEARCH_DAYS})")
-    parser.add_argument("--step", type=float, default=DEFAULT_STEP_SECONDS,
-                        help=f"Search step in seconds (default: {DEFAULT_STEP_SECONDS})")
-    parser.add_argument("--tolerance", type=float, default=DEFAULT_WINDOW_TOLERANCE_DEG,
-                        help=f"Window tolerance in degrees (default: {DEFAULT_WINDOW_TOLERANCE_DEG})")
-    parser.add_argument("--max-dv", type=float, default=None,
-                        help="Maximum total Δv filter (m/s)")
-    parser.add_argument("--window", type=int, default=None,
-                        help="Select Nth window (1-indexed) by sort order")
-    parser.add_argument("--latest", action="store_true",
-                        help="Select the latest window")
-    parser.add_argument("--skip-hours", type=float, default=5.0,
-                        help="Hours to skip after finding a window (default: 5)")
-    parser.add_argument("--ascent-alt", type=float, default=80000.0,
-                        help="Target ascent altitude in meters (default: 80000)")
-    parser.add_argument("--output", type=str, default="launch_window_output.json",
-                        help="Output JSON file path")
+    parser.add_argument(
+        '--search-days',
+        type=float,
+        default=WINDOW_SEARCH_DAYS,
+        help=f'Number of days to search (default: {WINDOW_SEARCH_DAYS})',
+    )
+    parser.add_argument(
+        '--step',
+        type=float,
+        default=WINDOW_SEARCH_STEP,
+        help=f'Search step in seconds (default: {WINDOW_SEARCH_STEP})',
+    )
+    parser.add_argument(
+        '--tolerance',
+        type=float,
+        default=WINDOW_TOLERANCE_DEG,
+        help=f'Window tolerance in degrees (default: {WINDOW_TOLERANCE_DEG})',
+    )
+    parser.add_argument('--max-dv', type=float, default=None, help='Maximum total Δv filter (m/s)')
+    parser.add_argument(
+        '--window', type=int, default=None, help='Select Nth window (1-indexed) by sort order'
+    )
+    parser.add_argument('--latest', action='store_true', help='Select the latest window')
+    parser.add_argument(
+        '--skip-hours',
+        type=float,
+        default=5.0,
+        help='Hours to skip after finding a window (default: 5)',
+    )
+    parser.add_argument(
+        '--dv',
+        type=float,
+        default=None,
+        help='Total vacuum Δv of rocket (m/s). If set, overrides auto-calc',
+    )
+    parser.add_argument(
+        '--ascent-alt',
+        type=float,
+        default=80000.0,
+        help='Target ascent altitude in meters (default: 80000)',
+    )
+    parser.add_argument(
+        '--output', type=str, default='launch_window_output.json', help='Output JSON file path'
+    )
     args = parser.parse_args()
 
     # ── Connect and read data ───────────────────────────────────────────
-    print("Connecting to kRPC...")
+    print('Connecting to kRPC...')
     conn = connect_krpc()
 
-    print("Reading target orbit...")
+    print('Reading target orbit...')
     target_orbit = read_target_orbit(conn)
 
-    print("Reading vessel resources...")
+    print('Reading vessel resources...')
     vessel_info = read_vessel_resources(conn)
 
     now = conn.space_center.ut
 
     # ── Compute available Δv ────────────────────────────────────────────
-    available_dv = compute_available_dv(vessel_info)
+    if args.dv is not None:
+        available_dv = args.dv
+        print(f'Using user-specified Δv: {available_dv:.0f} m/s')
+    else:
+        available_dv = compute_available_dv(vessel_info)
+        print(f'Computed Δv: {available_dv:.0f} m/s (single-stage estimate)')
+        print('  (for multi-stage rockets, use --dv YOUR_VALUE)')
 
     # ── Estimate ascent time ────────────────────────────────────────────
-    stages = [{
-        'dry_mass': vessel_info['dry_mass'],
-        'wet_mass': vessel_info['wet_mass'],
-        'isp': vessel_info['isp'],
-        'thrust': vessel_info['thrust'],
-    }]
-    ascent_time = ascent_duration_estimate(stages, args.ascent_alt)
+    stages = [
+        {
+            'dry_mass': vessel_info['dry_mass'],
+            'wet_mass': vessel_info['wet_mass'],
+            'isp': vessel_info['isp'],
+            'thrust': vessel_info['thrust'],
+        }
+    ]
+    # ascent_duration_estimate only sees current stage fuel on multi-stage rockets.
+    # Use empirical value: ~180s for Kerbin LKO ascent (overridable)
+    computed_ascent = ascent_duration_estimate(stages, args.ascent_alt)
+    ascent_time = max(computed_ascent, 140.0)
+    print(f'Computed ascent time: {computed_ascent:.0f}s, using: {ascent_time:.0f}s')
 
     # ── Find launch windows ──────────────────────────────────────────────
-    print(f"Searching for launch windows over {args.search_days} day(s)...")
+    print(f'Searching for launch windows over {args.search_days} day(s)...')
     skip_seconds = args.skip_hours * 3600.0
 
     raw_windows = find_launch_windows(
@@ -346,6 +414,8 @@ def main():
         ecc=target_orbit['ecc'],
         sma=target_orbit['sma'],
         M0=target_orbit['M0'],
+        epoch_ut=target_orbit['epoch'],
+        ascent_time=ascent_time,
         search_days=args.search_days,
         step=args.step,
         tolerance_deg=args.tolerance,
@@ -353,7 +423,7 @@ def main():
     )
 
     if not raw_windows:
-        print("No launch windows found in the search period.", file=sys.stderr)
+        print('No launch windows found in the search period.', file=sys.stderr)
         sys.exit(1)
 
     # ── Compute Δv for each window ──────────────────────────────────────
@@ -365,19 +435,21 @@ def main():
         if total_dv is None:
             continue
 
-        windows_data.append({
-            'launch_ut': window_ut,
-            'window_ut': window_ut,
-            'ascent_time': ascent_time,
-            'ascent_dv': ascent_dv,
-            'rendezvous_dv': rendezvous_dv,
-            'total_dv': total_dv,
-            'available_dv': available_dv,
-            'angular_error_deg': math.degrees(err),
-        })
+        windows_data.append(
+            {
+                'launch_ut': window_ut,
+                'window_ut': window_ut,
+                'ascent_time': ascent_time,
+                'ascent_dv': ascent_dv,
+                'rendezvous_dv': rendezvous_dv,
+                'total_dv': total_dv,
+                'available_dv': available_dv,
+                'angular_error_deg': math.degrees(err),
+            }
+        )
 
     if not windows_data:
-        print("No valid launch windows after Δv computation.", file=sys.stderr)
+        print('No valid launch windows after Δv computation.', file=sys.stderr)
         sys.exit(1)
 
     # ── Sort by total Δv ────────────────────────────────────────────────
@@ -388,7 +460,7 @@ def main():
         windows_data = [w for w in windows_data if w['total_dv'] <= args.max_dv]
 
     if not windows_data:
-        print(f"No windows within --max-dv={args.max_dv:.1f} m/s.", file=sys.stderr)
+        print(f'No windows within --max-dv={args.max_dv:.1f} m/s.', file=sys.stderr)
         sys.exit(1)
 
     # ── Select window ────────────────────────────────────────────────────
@@ -397,12 +469,14 @@ def main():
     elif args.window is not None:
         idx = args.window - 1  # 1-indexed
         if idx < 0 or idx >= len(windows_data):
-            print(f"Window index {args.window} out of range "
-                  f"(1-{len(windows_data)}).", file=sys.stderr)
+            print(
+                f'Window index {args.window} out of range (1-{len(windows_data)}).', file=sys.stderr
+            )
             sys.exit(1)
         selected = windows_data[idx]
     else:
-        selected = windows_data[0]  # lowest Δv
+        windows_data.sort(key=lambda w: w['launch_ut'])
+        selected = windows_data[0]
 
     # ── Build output ─────────────────────────────────────────────────────
     output = {
@@ -427,21 +501,21 @@ def main():
     # ── Write JSON ───────────────────────────────────────────────────────
     with open(args.output, 'w') as f:
         json.dump(output, f, indent=2)
-    print(f"\nOutput written to {args.output}")
+    print(f'\nOutput written to {args.output}')
 
     # ── Print table ──────────────────────────────────────────────────────
-    print(f"\n{'='*70}")
-    print(f"LAUNCH WINDOW RESULTS ({len(windows_data)} windows found)")
-    print(f"{'='*70}")
+    print(f'\n{"=" * 70}')
+    print(f'LAUNCH WINDOW RESULTS ({len(windows_data)} windows found)')
+    print(f'{"=" * 70}')
     print(format_table(windows_data))
-    print(f"\nSelected window: #{windows_data.index(selected) + 1}")
-    print(f"  Launch UT:       {selected['launch_ut']:.1f}")
-    print(f"  Ascent time:      {selected['ascent_time']:.1f} s")
-    print(f"  Ascent Δv:        {selected['ascent_dv']:.1f} m/s")
-    print(f"  Rendezvous Δv:    {selected['rendezvous_dv']:.1f} m/s")
-    print(f"  Total Δv:         {selected['total_dv']:.1f} m/s")
-    print(f"  Available Δv:     {selected['available_dv']:.1f} m/s")
-    print(f"  Angular error:    {selected['angular_error_deg']:.2f}°")
+    print(f'\nSelected window: #{windows_data.index(selected) + 1}')
+    print(f'  Launch UT:       {selected["launch_ut"]:.1f}')
+    print(f'  Ascent time:      {selected["ascent_time"]:.1f} s')
+    print(f'  Ascent Δv:        {selected["ascent_dv"]:.1f} m/s')
+    print(f'  Rendezvous Δv:    {selected["rendezvous_dv"]:.1f} m/s')
+    print(f'  Total Δv:         {selected["total_dv"]:.1f} m/s')
+    print(f'  Available Δv:     {selected["available_dv"]:.1f} m/s')
+    print(f'  Angular error:    {selected["angular_error_deg"]:.2f}°')
 
 
 if __name__ == '__main__':

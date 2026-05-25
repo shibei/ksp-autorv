@@ -1,26 +1,25 @@
 """Real-time terminal HUD for flight telemetry using ANSI escape sequences."""
-import sys
+
 import math
+import sys
 
 
 def format_value(val, unit, decimals=1):
     """Format a numeric value with unit, choosing appropriate notation."""
     if val is None or (isinstance(val, float) and math.isnan(val)):
-        return "-"
+        return '-'
     abs_val = abs(val)
-    if abs_val >= 1e5:
-        return f"{val:.{decimals}e}"
-    elif 0 < abs_val < 0.001:
-        return f"{val:.{decimals}e}"
+    if abs_val >= 1e5 or 0 < abs_val < 0.001:
+        return f'{val:.{decimals}e}'
     else:
-        return f"{val:.{decimals}f}"
+        return f'{val:.{decimals}f}'
 
 
 def format_time(seconds):
     """Format seconds as MM:SS."""
     m = int(seconds) // 60
     s = int(seconds) % 60
-    return f"{m:02d}:{s:02d}"
+    return f'{m:02d}:{s:02d}'
 
 
 class Dashboard:
@@ -47,13 +46,13 @@ class Dashboard:
     def start(self):
         """Hide cursor and prepare terminal."""
         self._started = True
-        sys.stdout.write("\033[?25l")
+        sys.stdout.write('\033[?25l')
         sys.stdout.flush()
 
     def stop(self):
         """Show cursor and clean up."""
-        sys.stdout.write("\033[?25h")
-        sys.stdout.write("\n")
+        sys.stdout.write('\033[?25h')
+        sys.stdout.write('\n')
         sys.stdout.flush()
         self._started = False
 
@@ -63,12 +62,12 @@ class Dashboard:
             return
 
         line = self.format_row(values, ut)
-        sys.stdout.write("\r\033[K" + line)
+        sys.stdout.write('\r\033[K' + line)
 
         if extra_lines:
             for el in extra_lines:
-                sys.stdout.write("\n\033[K" + el)
-            sys.stdout.write(f"\033[{len(extra_lines)}A")
+                sys.stdout.write('\n\033[K' + el)
+            sys.stdout.write(f'\033[{len(extra_lines)}A')
 
         sys.stdout.flush()
 
@@ -77,8 +76,8 @@ class Dashboard:
         parts = []
         for (label, unit, decimals), val in zip(self.columns, values):
             formatted = format_value(val, unit, decimals)
-            parts.append(f"{label}:{formatted}")
-        row = " | ".join(parts)
+            parts.append(f'{label}:{formatted}')
+        row = ' | '.join(parts)
         if ut is not None:
-            row = f"T+{format_time(ut)} | " + row
+            row = f'T+{format_time(ut)} | ' + row
         return row

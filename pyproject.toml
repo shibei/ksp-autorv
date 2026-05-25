@@ -1,0 +1,141 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "krpc-rendezvous"
+version = "0.2.0"
+description = "Direct ascent rendezvous autopilot for Kerbal Space Program via kRPC"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "shibe", email = "shibe@krpc-rendezvous.dev"},
+]
+keywords = ["ksp", "krpc", "kerbal", "autopilot", "rendezvous"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Topic :: Games/Entertainment :: Simulation",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "krpc>=0.5.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.8.0",
+    "pre-commit>=3.5.0",
+    "types-setuptools>=68.0",
+]
+ci = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.4.0",
+    "mypy>=1.8.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["krpc_rendezvous*"]
+
+# ── pytest ─────────────────────────────────────────────────────────────
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests requiring kRPC / KSP runtime (skipped in CI)",
+    "live_krpc: marks tests requiring a live kRPC/KSP server connection (skipped in CI)",
+    "online: marks tests requiring network access (skipped in CI)",
+]
+
+[tool.coverage.run]
+source = ["krpc_rendezvous"]
+omit = [
+    "*/__pycache__/*",
+]
+branch = true
+
+[tool.coverage.report]
+fail_under = 0
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+# ── ruff ───────────────────────────────────────────────────────────────
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "YTT", # flake8-2020
+    "ANN", # annotations
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+    "RUF", # ruff-specific
+]
+ignore = [
+    "ANN401",  # dynamically-typed-expression
+    "B905",    # zip-without-explicit-strict
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204",
+             "N802", "N803", "N806", "S101"]
+"krpc_rendezvous/common/config.py" = ["E402"]
+"krpc_rendezvous/common/flight_monitor.py" = ["E402", "ANN001", "ANN201", "ANN202", "ANN204", "SIM115"]
+"scripts/flight_monitor_demo.py" = ["ANN201", "ANN001"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+line-ending = "auto"
+
+# ── mypy ───────────────────────────────────────────────────────────────
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+disallow_any_unimported = false
+disallow_untyped_defs = false
+no_implicit_optional = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "krpc",
+    "numpy",
+]
+ignore_missing_imports = true

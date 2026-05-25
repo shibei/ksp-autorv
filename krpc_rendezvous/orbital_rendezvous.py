@@ -13,38 +13,34 @@ Phases:
 
 import argparse
 import json
+import logging
 import math
 import sys
 import time
-import logging
 
 import numpy as np
 
-from common.orbit_utils import (
-    lambert_universal,
-    cartesian_to_kepler,
-    orbital_position,
-    orbital_period,
-    MU_KERBIN,
-    R_KERBIN,
+from krpc_rendezvous.common.config import (
+    DV_BUDGET_DEFAULT,
+    MANEUVER_WAIT,
+    MAX_RENDEZVOUS_ITERATIONS,
+    RENDEZVOUS_DIST_THRESHOLD,
+    RENDEZVOUS_VEL_THRESHOLD,
+    TERMINAL_DIST_THRESHOLD,
 )
-from common.krpc_connection import connect_krpc, get_connection, safe_warp
-from common.dashboard import Dashboard
+from krpc_rendezvous.common.dashboard import Dashboard
+from krpc_rendezvous.common.krpc_connection import connect_krpc
+from krpc_rendezvous.common.orbit_utils import (
+    MU_KERBIN,
+    lambert_universal,
+    orbital_period,
+)
 
 logger = logging.getLogger(__name__)
 
-# ── Constants ──────────────────────────────────────────────────────────
-
-MAX_ITERATIONS = 20
-RENDEZVOUS_DIST_THRESHOLD = 200.0    # m
-RENDEZVOUS_VEL_THRESHOLD = 10.0      # m/s
-TERMINAL_DIST_THRESHOLD = 5000.0     # m – switch to prop-nav
-MANEUVER_WAIT = 30.0                 # seconds between Lambert burns
-DV_BUDGET_DEFAULT = 500.0           # m/s fallback budget
-HOHMANN_CIRCULARIZE_MARGIN = 1000.0  # m above current altitude
-
 
 # ── Proportional navigation ───────────────────────────────────────────
+
 
 def proportional_navigation(vessel, target_vessel, nav_constant=3.0):
     """Compute proportional-navigation guidance commands.
@@ -74,7 +70,7 @@ def proportional_navigation(vessel, target_vessel, nav_constant=3.0):
     los = r_rel / r_mag
 
     # LOS rate: omega = (r_rel × v_rel) / |r_rel|²
-    omega = np.cross(r_rel, v_rel) / (r_mag ** 2)
+    omega = np.cross(r_rel, v_rel) / (r_mag**2)
 
     # Proportional navigation command
     v_rel_mag = np.linalg.norm(v_rel)
@@ -99,6 +95,7 @@ def proportional_navigation(vessel, target_vessel, nav_constant=3.0):
 
 
 # ── Helper functions ──────────────────────────────────────────────────
+
 
 def get_vessel_state(vessel, body_rf):
     """Get position and velocity as numpy arrays in body reference frame."""
@@ -204,7 +201,7 @@ def hohmann_fallback(vessel, body_rf):
     dv_needed = abs(v_circ - v_mag)
 
     if dv_needed < 1.0:
-        logger.info("Already in near-circular orbit, skipping circularization")
+        logger.info('Already in near-circular orbit, skipping circularization')
         return False
 
     # Direction: prograde or retrograde
@@ -214,36 +211,46 @@ def hohmann_fallback(vessel, body_rf):
     else:
         dv_vector = -v_dir * dv_needed  # retrograde
 
-    logger.info(f"Hohmann fallback: circularization burn Δv={dv_needed:.1f} m/s")
+    logger.info(f'Hohmann fallback: circularization burn Δv={dv_needed:.1f} m/s')
     execute_burn(vessel, dv_vector, body_rf)
     return True
 
 
 # ── Main ──────────────────────────────────────────────────────────────
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Orbital rendezvous guidance for KSP kRPC"
+    parser = argparse.ArgumentParser(description='Orbital rendezvous guidance for KSP kRPC')
+    parser.add_argument(
+        '--state-file',
+        type=str,
+        default='ascent_state.json',
+        help='Path to ascent state JSON (default: ascent_state.json)',
     )
-    parser.add_argument('--state-file', type=str, default='ascent_state.json',
-                        help='Path to ascent state JSON (default: ascent_state.json)')
-    parser.add_argument('--dv-budget', type=float, default=None,
-                        help='Maximum delta-v budget in m/s (default: auto-detect)')
+    parser.add_argument(
+        '--dv-budget',
+        type=float,
+        default=None,
+        help='Maximum delta-v budget in m/s (default: auto-detect)',
+    )
     args = parser.parse_args()
 
     # ── Load ascent state ─────────────────────────────────────────────
     try:
         with open(args.state_file, 'r') as f:
-            state = json.load(f)
+            json.load(f)
     except FileNotFoundError:
         print(f"ERROR: State file '{args.state_file}' not found.", file=sys.stderr)
         sys.exit(1)
     except json.JSONDecodeError as e:
         print(f"ERROR: Invalid JSON in '{args.state_file}': {e}", file=sys.stderr)
         sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"ERROR: Invalid JSON in '{args.state_file}': {e}", file=sys.stderr)
+        sys.exit(1)
 
     # ── Connect to kRPC ────────────────────────────────────────────────
-    print("Connecting to kRPC...")
+    print('Connecting to kRPC...')
     conn = connect_krpc()
     sc = conn.space_center
     vessel = sc.active_vessel
@@ -251,11 +258,11 @@ def main():
     # ── Verify target vessel ───────────────────────────────────────────
     target_vessel = sc.target_vessel
     if target_vessel is None:
-        print("ERROR: No target vessel set. Set a target in KSP first.", file=sys.stderr)
+        print('ERROR: No target vessel set. Set a target in KSP first.', file=sys.stderr)
         sys.exit(1)
 
-    print(f"Chaser: {vessel.name}")
-    print(f"Target: {target_vessel.name}")
+    print(f'Chaser: {vessel.name}')
+    print(f'Target: {target_vessel.name}')
 
     # ── Determine delta-v budget ───────────────────────────────────────
     if args.dv_budget is not None:
@@ -279,7 +286,7 @@ def main():
         if dv_budget < DV_BUDGET_DEFAULT:
             dv_budget = DV_BUDGET_DEFAULT
 
-    print(f"Delta-v budget: {dv_budget:.1f} m/s")
+    print(f'Delta-v budget: {dv_budget:.1f} m/s')
 
     # ── Setup ──────────────────────────────────────────────────────────
     body_rf = vessel.orbit.body.reference_frame
@@ -288,23 +295,22 @@ def main():
 
     # Dashboard
     columns = [
-        ("DIST", "km", 2),
-        ("dVEL", "m/s", 1),
-        ("DV", "m/s", 0),
-        ("PHASE", "deg", 1),
-        ("NEXT", "s", 0),
+        ('DIST', 'km', 2),
+        ('dVEL', 'm/s', 1),
+        ('DV', 'm/s', 0),
+        ('PHASE', 'deg', 1),
+        ('NEXT', 's', 0),
     ]
     dashboard = Dashboard(columns=columns)
     dashboard.start()
 
     total_dv_spent = 0.0
     iteration = 0
-    status = "ACTIVE"
-    used_hohmann_fallback = False
+    status = 'ACTIVE'
 
     # ── Main loop ─────────────────────────────────────────────────────
     try:
-        while iteration < MAX_ITERATIONS:
+        while iteration < MAX_RENDEZVOUS_ITERATIONS:
             iteration += 1
 
             # Read current state
@@ -322,25 +328,24 @@ def main():
 
             # ── Check success ──────────────────────────────────────────
             if dist < RENDEZVOUS_DIST_THRESHOLD and dv_rel < RENDEZVOUS_VEL_THRESHOLD:
-                status = "SUCCESS"
-                print(f"\n✅ RENDEZVOUS SUCCESS at iteration {iteration}")
-                print(f"   Distance: {dist:.1f} m")
-                print(f"   Relative velocity: {dv_rel:.2f} m/s")
-                print(f"   Total Δv spent: {total_dv_spent:.1f} m/s")
+                status = 'SUCCESS'
+                print(f'\n✅ RENDEZVOUS SUCCESS at iteration {iteration}')
+                print(f'   Distance: {dist:.1f} m')
+                print(f'   Relative velocity: {dv_rel:.2f} m/s')
+                print(f'   Total Δv spent: {total_dv_spent:.1f} m/s')
                 break
 
             # ── Check budget ───────────────────────────────────────────
             if total_dv_spent >= dv_budget:
-                print(f"\n⚠️  Delta-v budget exceeded ({total_dv_spent:.1f}/{dv_budget:.1f} m/s)")
-                print("   Switching to Hohmann fallback...")
+                print(f'\n⚠️  Delta-v budget exceeded ({total_dv_spent:.1f}/{dv_budget:.1f} m/s)')
+                print('   Switching to Hohmann fallback...')
                 hohmann_fallback(vessel, body_rf)
-                used_hohmann_fallback = True
-                status = "DEGRADED"
+                status = 'DEGRADED'
                 break
 
             # ── Terminal phase: proportional navigation ────────────────
             if dist < TERMINAL_DIST_THRESHOLD:
-                print(f"\n  Terminal phase: dist={dist:.0f} m, switching to prop-nav")
+                print(f'\n  Terminal phase: dist={dist:.0f} m, switching to prop-nav')
 
                 pitch, heading = proportional_navigation(vessel, target_vessel)
 
@@ -368,7 +373,7 @@ def main():
             # ── Lambert phase ──────────────────────────────────────────
             # Wait between maneuvers
             if iteration > 1:
-                print(f"  Waiting {MANEUVER_WAIT:.0f}s before next maneuver...")
+                print(f'  Waiting {MANEUVER_WAIT:.0f}s before next maneuver...')
                 dashboard.update(
                     [dist / 1000.0, dv_rel, total_dv_spent, phase, MANEUVER_WAIT],
                     ut=sc.ut,
@@ -380,20 +385,16 @@ def main():
 
             # Solve Lambert problem
             try:
-                v1_lambert, v2_lambert = lambert_universal(
-                    r_chaser, r_target, dt, MU_KERBIN
-                )
+                v1_lambert, v2_lambert = lambert_universal(r_chaser, r_target, dt, MU_KERBIN)
             except Exception as e:
-                logger.warning(f"Lambert solver failed (iteration {iteration}): {e}")
+                logger.warning(f'Lambert solver failed (iteration {iteration}): {e}')
                 # Try with longer transfer time
                 dt *= 2.0
                 try:
-                    v1_lambert, v2_lambert = lambert_universal(
-                        r_chaser, r_target, dt, MU_KERBIN
-                    )
+                    v1_lambert, v2_lambert = lambert_universal(r_chaser, r_target, dt, MU_KERBIN)
                 except Exception as e2:
-                    logger.error(f"Lambert solver failed again: {e2}")
-                    print(f"  Lambert solver failed, skipping iteration {iteration}")
+                    logger.error(f'Lambert solver failed again: {e2}')
+                    print(f'  Lambert solver failed, skipping iteration {iteration}')
                     continue
 
             # Compute required delta-v
@@ -407,8 +408,10 @@ def main():
                 dv_needed = dv_needed / np.linalg.norm(dv_needed) * dv_mag
 
             # Execute burn
-            print(f"  Iteration {iteration}: Δv={dv_mag:.1f} m/s, "
-                  f"dist={dist/1000:.2f} km, dt={dt:.0f} s")
+            print(
+                f'  Iteration {iteration}: Δv={dv_mag:.1f} m/s, '
+                f'dist={dist / 1000:.2f} km, dt={dt:.0f} s'
+            )
 
             burn_dv = execute_burn(vessel, dv_needed, body_rf)
             total_dv_spent += burn_dv
@@ -421,29 +424,29 @@ def main():
 
         else:
             # Max iterations reached
-            print(f"\n❌ FAILED: Max iterations ({MAX_ITERATIONS}) reached")
-            print(f"   Final distance: {dist:.0f} m")
-            print(f"   Total Δv spent: {total_dv_spent:.1f} m/s")
-            status = "FAILED"
+            print(f'\n❌ FAILED: Max iterations ({MAX_RENDEZVOUS_ITERATIONS}) reached')
+            print(f'   Final distance: {dist:.0f} m')
+            print(f'   Total Δv spent: {total_dv_spent:.1f} m/s')
+            status = 'FAILED'
 
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user.")
-        status = "INTERRUPTED"
+        print('\n\nInterrupted by user.')
+        status = 'INTERRUPTED'
 
     finally:
         dashboard.stop()
 
     # ── Report final status ────────────────────────────────────────────
-    if status == "SUCCESS":
-        print(f"\n✅ SUCCESS: Rendezvous complete")
-    elif status == "DEGRADED":
-        print(f"\n⚠️  DEGRADED: Hohmann fallback used (budget exceeded)")
-    elif status == "FAILED":
-        print(f"\n❌ FAILED: Could not achieve rendezvous")
+    if status == 'SUCCESS':
+        print('\n✅ SUCCESS: Rendezvous complete')
+    elif status == 'DEGRADED':
+        print('\n⚠️  DEGRADED: Hohmann fallback used (budget exceeded)')
+    elif status == 'FAILED':
+        print('\n❌ FAILED: Could not achieve rendezvous')
 
-    print(f"   Iterations: {iteration}")
-    print(f"   Total Δv spent: {total_dv_spent:.1f} m/s")
-    print(f"   Budget: {dv_budget:.1f} m/s")
+    print(f'   Iterations: {iteration}')
+    print(f'   Total Δv spent: {total_dv_spent:.1f} m/s')
+    print(f'   Budget: {dv_budget:.1f} m/s')
 
 
 if __name__ == '__main__':

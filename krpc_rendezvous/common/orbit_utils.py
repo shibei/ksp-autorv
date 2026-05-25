@@ -6,12 +6,13 @@ Pure math functions using numpy. Zero kRPC dependency.
 import numpy as np
 
 # ── Kerbin constants ──────────────────────────────────────────────────
-MU_KERBIN = 3.5316e12      # gravitational parameter [m³/s²]
-R_KERBIN = 600_000         # radius [m]
-G0_KERBIN = 9.81           # standard gravity [m/s²]
+MU_KERBIN = 3.5316e12  # gravitational parameter [m³/s²]
+R_KERBIN = 600_000  # radius [m]
+G0_KERBIN = 9.81  # standard gravity [m/s²]
 
 
 # ── Kepler equation solvers ───────────────────────────────────────────
+
 
 def kepler_epoch(M: float, e: float, tol: float = 1e-10, max_iter: int = 100) -> float:
     """Solve Kepler's equation  M = E - e·sin(E)  for eccentric anomaly E.
@@ -29,20 +30,19 @@ def kepler_epoch(M: float, e: float, tol: float = 1e-10, max_iter: int = 100) ->
 
 def eccentric_anomaly_from_true(f: float, e: float) -> float:
     """Convert true anomaly to eccentric anomaly."""
-    E = 2.0 * np.arctan2(np.sqrt(1.0 - e) * np.sin(f / 2.0),
-                           np.sqrt(1.0 + e) * np.cos(f / 2.0))
+    E = 2.0 * np.arctan2(np.sqrt(1.0 - e) * np.sin(f / 2.0), np.sqrt(1.0 + e) * np.cos(f / 2.0))
     return E
 
 
 def true_anomaly_from_mean(M: float, e: float, tol: float = 1e-10) -> float:
     """Convert mean anomaly to true anomaly via Kepler's equation."""
     E = kepler_epoch(M, e, tol=tol)
-    f = np.arctan2(np.sqrt(1.0 - e**2) * np.sin(E),
-                    np.cos(E) - e)
+    f = np.arctan2(np.sqrt(1.0 - e**2) * np.sin(E), np.cos(E) - e)
     return f
 
 
 # ── Orbital element helpers ───────────────────────────────────────────
+
 
 def orbital_period(sma: float, mu: float = MU_KERBIN) -> float:
     """Orbital period  T = 2π√(a³/μ)."""
@@ -61,9 +61,16 @@ def mean_anomaly_at_time(t: float, t0: float, M0: float, n: float) -> float:
 
 # ── Position / velocity from elements ────────────────────────────────
 
-def orbital_position(inc: float, lan: float, arg_pe: float,
-                     sma: float, ecc: float, true_anomaly: float,
-                     mu: float = MU_KERBIN):
+
+def orbital_position(
+    inc: float,
+    lan: float,
+    arg_pe: float,
+    sma: float,
+    ecc: float,
+    true_anomaly: float,
+    mu: float = MU_KERBIN,
+):
     """Return (r, v) numpy arrays from classical orbital elements.
 
     Uses perifocal frame then rotates via 3-1-3 Euler angles
@@ -76,31 +83,34 @@ def orbital_position(inc: float, lan: float, arg_pe: float,
 
     # Perifocal frame
     r_pf = np.array([r_mag * np.cos(f), r_mag * np.sin(f), 0.0])
-    v_pf = np.array([-mu / h * np.sin(f),
-                      mu / h * (ecc + np.cos(f)),
-                      0.0])
+    v_pf = np.array([-mu / h * np.sin(f), mu / h * (ecc + np.cos(f)), 0.0])
 
     # Rotation matrix: Rz(Ω) · Rx(i) · Rz(ω)
     cos_O, sin_O = np.cos(lan), np.sin(lan)
     cos_i, sin_i = np.cos(inc), np.sin(inc)
     cos_w, sin_w = np.cos(arg_pe), np.sin(arg_pe)
 
-    R = np.array([
-        [cos_O*cos_w - sin_O*sin_w*cos_i,
-         -cos_O*sin_w - sin_O*cos_w*cos_i,
-         sin_O*sin_i],
-        [sin_O*cos_w + cos_O*sin_w*cos_i,
-         -sin_O*sin_w + cos_O*cos_w*cos_i,
-         -cos_O*sin_i],
-        [sin_w*sin_i,
-         cos_w*sin_i,
-         cos_i],
-    ])
+    R = np.array(
+        [
+            [
+                cos_O * cos_w - sin_O * sin_w * cos_i,
+                -cos_O * sin_w - sin_O * cos_w * cos_i,
+                sin_O * sin_i,
+            ],
+            [
+                sin_O * cos_w + cos_O * sin_w * cos_i,
+                -sin_O * sin_w + cos_O * cos_w * cos_i,
+                -cos_O * sin_i,
+            ],
+            [sin_w * sin_i, cos_w * sin_i, cos_i],
+        ]
+    )
 
     return R @ r_pf, R @ v_pf
 
 
 # ── Cartesian → Keplerian elements ───────────────────────────────────
+
 
 def cartesian_to_kepler(r_vec, v_vec, mu: float = MU_KERBIN) -> dict:
     """Convert (r, v) to classical orbital elements dict.
@@ -181,6 +191,7 @@ def cartesian_to_kepler(r_vec, v_vec, mu: float = MU_KERBIN) -> dict:
 
 # ── Stumpff functions ────────────────────────────────────────────────
 
+
 def _stumpff_C(z: float) -> float:
     """Stumpff function C(z)."""
     if z > 1e-6:
@@ -205,8 +216,10 @@ def _stumpff_S(z: float) -> float:
 
 # ── Lambert solver (universal variable) ──────────────────────────────
 
-def lambert_universal(r1_vec, r2_vec, dt: float, mu: float = MU_KERBIN,
-                      tol: float = 1e-8, max_iter: int = 200):
+
+def lambert_universal(
+    r1_vec, r2_vec, dt: float, mu: float = MU_KERBIN, tol: float = 1e-8, max_iter: int = 200
+):
     """Solve Lambert's problem using universal variable formulation.
 
     Returns (v1, v2) velocity vectors.
@@ -250,7 +263,11 @@ def lambert_universal(r1_vec, r2_vec, dt: float, mu: float = MU_KERBIN,
 
         # Derivative dt/dz
         if abs(z) > 1e-6:
-            dt_dz = (x**3 * (S - 3.0 * S * z / (2.0 * z) + 1.0 / (2.0 * z) * (C / (2.0 * z) - 3.0 * S / (2.0 * z * z))))
+            dt_dz = x**3 * (
+                S
+                - 3.0 * S * z / (2.0 * z)
+                + 1.0 / (2.0 * z) * (C / (2.0 * z) - 3.0 * S / (2.0 * z * z))
+            )
             # Simpler numerical derivative for robustness
             dz = 1e-7 * max(1.0, abs(z))
             C2 = _stumpff_C(z + dz)
@@ -301,8 +318,8 @@ def lambert_universal(r1_vec, r2_vec, dt: float, mu: float = MU_KERBIN,
 
 # ── Ascent helpers ────────────────────────────────────────────────────
 
-def gravity_turn_pitch_profile(h: float, h_start: float, h_end: float,
-                                pitch_end: float) -> float:
+
+def gravity_turn_pitch_profile(h: float, h_start: float, h_end: float, pitch_end: float) -> float:
     """Gravity turn pitch profile: vertical (90°) below h_start,
     quadratically interpolating to pitch_end at h_end so the pitch
     stays high during the early phase of the turn.
@@ -315,7 +332,7 @@ def gravity_turn_pitch_profile(h: float, h_start: float, h_end: float,
     if h >= h_end:
         return pitch_end
     frac = (h - h_start) / (h_end - h_start)
-    return pitch_start + (pitch_end - pitch_start) * frac ** 2
+    return pitch_start + (pitch_end - pitch_start) * frac**2
 
 
 def delta_v_estimate(isp, m0: float, mf: float, g0: float = G0_KERBIN) -> float:

@@ -1,6 +1,9 @@
 """Singleton kRPC connection manager with auto-reconnect and safe time warp."""
-import time
+
 import logging
+import time
+
+from krpc_rendezvous.common.config import KSC_ADDRESS, KSC_RPC_PORT, KSC_STREAM_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -26,15 +29,20 @@ class KrpcConnection:
             cls._instance.close()
         cls._instance = None
 
-    def connect(self, name="DirectAscentRendezvous", address="127.0.0.1",
-                rpc_port=50000, stream_port=50001):
+    def connect(self, name='DirectAscentRendezvous', address=None, rpc_port=None, stream_port=None):
+        if address is None:
+            address = KSC_ADDRESS
+        if rpc_port is None:
+            rpc_port = KSC_RPC_PORT
+        if stream_port is None:
+            stream_port = KSC_STREAM_PORT
         import krpc
+
         self._conn = krpc.connect(
-            name=name, address=address,
-            rpc_port=rpc_port, stream_port=stream_port
+            name=name, address=address, rpc_port=rpc_port, stream_port=stream_port
         )
         self._connected = True
-        logger.info(f"Connected to kRPC server at {address}:{rpc_port}")
+        logger.info(f'Connected to kRPC server at {address}:{rpc_port}')
         return self._conn
 
     def close(self):
@@ -45,7 +53,7 @@ class KrpcConnection:
     @property
     def conn(self):
         if not self._connected:
-            raise RuntimeError("kRPC not connected. Call connect() first.")
+            raise RuntimeError('kRPC not connected. Call connect() first.')
         return self._conn
 
     @property
@@ -64,8 +72,16 @@ class KrpcConnection:
     def ut(self):
         return self.space_center.ut
 
+    def add_stream(self, *args, **kwargs):
+        return self.conn.add_stream(*args, **kwargs)
 
-def connect_krpc(name="DirectAscentRendezvous"):
+    def __getattr__(self, name):
+        if name.startswith('_') or name in ('conn',):
+            raise AttributeError(name)
+        return getattr(self.conn, name)
+
+
+def connect_krpc(name='DirectAscentRendezvous'):
     """Convenience function: connect and return KrpcConnection instance."""
     inst = KrpcConnection.get_instance()
     inst.connect(name=name)
@@ -87,8 +103,9 @@ def safe_warp(target_ut, margin=60.0, max_rate=None):
         return
 
     vessel = sc.active_vessel
-    if vessel.flight(vessel.orbit.body.reference_frame).mean_altitude < 70000:
-        return
+    if vessel.situation.name != 'pre_launch':
+        if vessel.flight(vessel.orbit.body.reference_frame).mean_altitude < 70000:
+            return
 
     warp_to = target_ut - margin
     if max_rate is not None:

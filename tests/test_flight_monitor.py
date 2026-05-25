@@ -12,11 +12,15 @@ def test_flight_record_fields():
         # position
         'latitude', 'longitude', 'altitude_from_surface',
         # velocity
-        'speed', 'vertical_speed', 'horizontal_speed', 'direction_heading',
+        'speed', 'orbital_speed', 'target_speed', 'vertical_speed', 'horizontal_speed', 'direction_heading',
+        'pitch', 'roll',
         # resources
         'stage', 'mass', 'thrust', 'available_thrust',
         # controls
-        'stage_remaining_fuel', 'stage_delta_v',
+        'stage_remaining_fuel', 'total_delta_v', 'per_stage_delta_v',
+        # attitude
+        'from_pro', 'angle_of_attack', 'sideslip_angle', 'dynamic_pressure',
+        'current_stage_delta_v', 'active_engines', 'throttle',
     ]
     for e in expected:
         assert e in fields_list, f"Missing field: {e}"
@@ -111,8 +115,10 @@ def test_dashboard_renders_without_crashing():
         available_thrust=600.0,
         mass=50000.0,
         stage_remaining_fuel=1200.0,
-        stage_delta_v=4500000.0,
+        total_delta_v=4902.0,
         direction_heading=90.0,
+        pitch=5.0,
+        roll=-2.0,
         period=3600.0,
         time_to_ap=1200.0,
         time_to_pe=1800.0,
