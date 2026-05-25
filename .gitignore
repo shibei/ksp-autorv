@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+coverage/
+htmlcov/
+*.coverage.*
+
+# kRPC output files
+launch_window_output.json
+ascent_state.json
+ascent_tuning.csv
+
+# IDE
+.vscode/
+.idea/
+
+# OpenCode workspace state
+.omo/
+
+# OpenCode npm deps
+.opencode/node_modules/
+
+# Conda
+*.conda/
+
+# Build / tooling
+*.egg/
+dist/
+build/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+
+# Logs
+*.log
